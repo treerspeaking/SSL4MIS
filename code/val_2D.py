@@ -23,6 +23,7 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256]):
         slice = image[ind, :, :]
         x, y = slice.shape[0], slice.shape[1]
         slice = zoom(slice, (patch_size[0] / x, patch_size[1] / y), order=0)
+        # Why bro
         input = torch.from_numpy(slice).unsqueeze(
             0).unsqueeze(0).float().cuda()
         net.eval()
@@ -33,6 +34,63 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256]):
             pred = zoom(out, (x / patch_size[0], y / patch_size[1]), order=0)
             prediction[ind] = pred
     metric_list = []
+    for i in range(1, classes):
+        metric_list.append(calculate_metric_percase(
+            prediction == i, label == i))
+    return metric_list
+
+def my_test(image, label, net, classes, patch_size=[256, 256]):
+    # oh pls lord
+    image, label = image.cpu().detach(
+    ).numpy(), label.squeeze(0).cpu().detach().numpy()
+    prediction = np.zeros((image.shape[0], label.shape[0], label.shape[1]))
+    for ind in range(image.shape[0]):
+        # Cause this this is N, C, H, W
+        # So to go through a single image is
+        slice = image[ind, :, :, :]
+        _, x, y = slice.shape
+        slice = zoom(slice, (1, patch_size[0] / x, patch_size[1] / y), order=0)
+        # Why bro
+        input = torch.from_numpy(slice).unsqueeze(
+            0).float().cuda()
+        net.eval()
+        with torch.no_grad():
+            out = torch.argmax(torch.softmax(
+                net(input), dim=1), dim=1).squeeze(0)
+            out = out.cpu().detach().numpy()
+            pred = zoom(out, (x / patch_size[0], y / patch_size[1]), order=0)
+            prediction[ind] = pred
+    metric_list = []
+    prediction = prediction.squeeze(0)
+    for i in range(1, classes):
+        metric_list.append(calculate_metric_percase(
+            prediction == i, label == i))
+    return metric_list
+
+def my_test_single_ds(image, label, net, classes, patch_size=[256, 256]):
+    # oh pls lord
+    image, label = image.cpu().detach(
+    ).numpy(), label.squeeze(0).cpu().detach().numpy()
+    prediction = np.zeros((image.shape[0], label.shape[0], label.shape[1]))
+    for ind in range(image.shape[0]):
+        # Cause this this is N, C, H, W
+        # So to go through a single image is
+        slice = image[ind, :, :, :]
+        _, x, y = slice.shape
+        slice = zoom(slice, (1, patch_size[0] / x, patch_size[1] / y), order=0)
+        # Why bro
+        input = torch.from_numpy(slice).unsqueeze(
+            0).float().cuda()
+        net.eval()
+        with torch.no_grad():
+            output_main, _, _, _ = net(input)
+            out = torch.argmax(torch.softmax(
+                output_main, dim=1), dim=1).squeeze(0)
+            out = out.cpu().detach().numpy()
+            pred = zoom(out, (x / patch_size[0], y / patch_size[1]), order=0)
+            prediction[ind] = pred
+    metric_list = []
+    prediction = prediction.squeeze(0)
     for i in range(1, classes):
         metric_list.append(calculate_metric_percase(
             prediction == i, label == i))

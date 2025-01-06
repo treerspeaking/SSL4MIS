@@ -15,7 +15,9 @@ import augmentations
 from augmentations.ctaugment import OPS
 import matplotlib.pyplot as plt
 from PIL import Image
-
+import os
+import deeplake
+os.environ["DEEPLAKE_DOWNLOAD_PATH"] = "./"
 
 class BaseDataSets(Dataset):
     def __init__(
@@ -70,7 +72,82 @@ class BaseDataSets(Dataset):
                 sample = self.transform(sample)
         sample["idx"] = idx
         return sample
+class MyBaseDataSets(Dataset):
+    def __init__(
+        self,
+        base_dir=None,
+        split="train",
+        num=None,
+        transform=None,
+        ops_weak=None,
+        ops_strong=None,
+    ):
+        self._base_dir = base_dir
+        self.sample_list = []
+        self.split = split
+        self.transform = transform
+        self.ops_weak = ops_weak
+        self.ops_strong = ops_strong
 
+        assert bool(ops_weak) == bool(
+            ops_strong
+        ), "For using CTAugment learned policies, provide both weak and strong batch augmentation policy"
+
+        if self.split == "train":
+            self.ds = deeplake.load("/home/treerspeaking/src/python/ss_baseline/hub_activeloop_glas-train", access_method="local:8", memory_cache_size=21474836480)
+            # with open(self._base_dir + "/train_slices.list", "r") as f1:
+            #     self.sample_list = f1.readlines()
+            # self.sample_list = [item.replace("\n", "") for item in self.sample_list]
+            # # 计算要选择的数据数量（10%）
+            # num_samples = len(self.sample_list)
+            # num_samples_to_select = int(1 * num_samples)
+            # # 随机选择数据
+            # selected_samples = random.sample(self.sample_list, num_samples_to_select)
+            # self.sample_list = selected_samples
+
+        elif self.split == "val":
+            self.ds = deeplake.load("/home/treerspeaking/src/python/ss_baseline/hub_activeloop_glas-test", access_method="local:8", memory_cache_size=21474836480)
+            # with open(self._base_dir + "/val.list", "r") as f:
+            #     self.sample_list = f.readlines()
+            # self.sample_list = [item.replace("\n", "") for item in self.sample_list]
+        if num is not None and self.split == "train":
+            self.ds = self.ds[:num]
+        print("total {} samples".format(len(self.sample_list)))
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        # case = self.sample_list[idx]
+        # if self.split == "train":
+        #     h5f = h5py.File(self._base_dir + "/data/slices/{}.h5".format(case), "r")
+        # else:
+        #     h5f = h5py.File(self._base_dir + "/data/{}.h5".format(case), "r")
+        # numpy type does not work with deeplake very good
+        # The load in channel is (H, W, C)
+        # Also in future work also need to some how take into account of how to spilt it by patient 
+        image = self.ds[int(idx)]["images"].numpy() / 255.0 # I have to normalize this later
+        label = self.ds[int(idx)]["masks"].numpy().squeeze()
+        sample = {"image": image, "label": label}
+        if self.split == "train":
+            if None not in (self.ops_weak, self.ops_strong):
+                sample = self.transform(sample, self.ops_weak, self.ops_strong)
+            else:
+                sample = self.transform(sample)
+            # i probly gonna lost 15 minute if i have to change this to v2.ToTensor()
+            sample["image"] = sample["image"].permute(2, 0, 1)
+            # Out put of train get item is torch tensor
+            # The code could be fix by simply turning them all into Image and Mask from torchvision.tv_tensors
+        
+        # Final permute so that it fit with the pytorch (C, H , W)
+        if self.split == "val":
+            sample = self.transform(sample)
+            sample["image"] = sample["image"].transpose(2, 0, 1)
+            # output of val is numpy array 
+            # Very good
+        
+        sample["idx"] = idx
+        return sample
 
 def random_rot_flip(image, label=None):
     k = np.random.randint(0, 4)
@@ -143,6 +220,27 @@ class CTATransform(object):
         x, y = image.shape
         return zoom(image, (self.output_size[0] / x, self.output_size[1] / y), order=0)
 
+class ReShape(object):
+    def __init__(self, output_size):
+        self.output_size = output_size
+
+    def __call__(self, sample):
+        image, label = sample["image"], sample["label"]
+        
+        if (len(image.shape) == 3):
+            # the opening input dim is (x, y, _)
+            x, y, _ = image.shape
+            image = zoom(image, (self.output_size[0] / x, self.output_size[1] / y, 1), order=0)
+            image = image.astype(np.float32)
+        else:
+            x, y = image.shape
+            image = zoom(image, (self.output_size[0] / x, self.output_size[1] / y), order=0)
+            # it return a new array of shape (output_size[0], output_size[1] , 1)
+            image = image.astype(np.float32).unsqueeze(0)
+        label = zoom(label, (self.output_size[0] / x, self.output_size[1] / y), order=0)
+        label = torch.from_numpy(label.astype(np.uint8))
+        sample = {"image": image, "label": label}
+        return sample
 
 class RandomGenerator(object):
     def __init__(self, output_size):
@@ -157,10 +255,18 @@ class RandomGenerator(object):
             image, label = random_rot_flip(image, label)
         elif random.random() > 0.5:
             image, label = random_rotate(image, label)
-        x, y = image.shape
-        image = zoom(image, (self.output_size[0] / x, self.output_size[1] / y), order=0)
+        
+        if (len(image.shape) == 3):
+            # the opening input dim is (x, y, _)
+            x, y, _ = image.shape
+            image = zoom(image, (self.output_size[0] / x, self.output_size[1] / y, 1), order=0)
+            image = torch.from_numpy(image.astype(np.float32))
+        else:
+            x, y = image.shape
+            image = zoom(image, (self.output_size[0] / x, self.output_size[1] / y), order=0)
+            image = torch.from_numpy(image.astype(np.float32)).unsqueeze(0)
         label = zoom(label, (self.output_size[0] / x, self.output_size[1] / y), order=0)
-        image = torch.from_numpy(image.astype(np.float32)).unsqueeze(0)
+
         label = torch.from_numpy(label.astype(np.uint8))
         sample = {"image": image, "label": label}
         return sample

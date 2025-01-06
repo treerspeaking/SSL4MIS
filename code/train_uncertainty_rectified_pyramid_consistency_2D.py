@@ -21,9 +21,9 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from dataloaders import utils
-from dataloaders.dataset import BaseDataSets, RandomGenerator, TwoStreamBatchSampler
+from dataloaders.dataset import BaseDataSets, RandomGenerator, TwoStreamBatchSampler, MyBaseDataSets, ReShape
 from utils import losses, metrics, ramps
-from val_2D import test_single_volume_ds
+from val_2D import test_single_volume_ds, my_test_single_ds
 from networks.net_factory import net_factory
 
 parser = argparse.ArgumentParser()
@@ -46,6 +46,8 @@ parser.add_argument('--patch_size', type=list,  default=[256, 256],
 parser.add_argument('--seed', type=int,  default=1337, help='random seed')
 parser.add_argument('--num_classes', type=int,  default=4,
                     help='output channel of network')
+parser.add_argument('--in_channels', type=int,  default=3,
+                    help='input channel of network')
 
 # label and unlabel
 parser.add_argument('--labeled_bs', type=int, default=12,
@@ -63,7 +65,7 @@ args = parser.parse_args()
 def patients_to_slices(dataset, patiens_num):
     ref_dict = None
     if "ACDC" in dataset:
-        ref_dict = {"3": 68, "7": 136,
+        ref_dict = {"3": 17, "7": 136,
                     "14": 256, "21": 396, "28": 512, "35": 664, "140": 1312}
     elif "Prostate":
         ref_dict = {"2": 27, "4": 53, "8": 120,
@@ -84,16 +86,24 @@ def train(args, snapshot_path):
     batch_size = args.batch_size
     max_iterations = args.max_iterations
 
-    model = net_factory(net_type=args.model, in_chns=1,
+    model = net_factory(net_type=args.model, in_chns=args.in_channels,
                         class_num=num_classes)
 
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
 
-    db_train = BaseDataSets(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
+    # db_train = BaseDataSets(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
+    #     RandomGenerator(args.patch_size)
+    # ]))
+    # db_val = BaseDataSets(base_dir=args.root_path, split="val")
+    
+    db_train = MyBaseDataSets(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
         RandomGenerator(args.patch_size)
     ]))
-    db_val = BaseDataSets(base_dir=args.root_path, split="val")
+    db_val = MyBaseDataSets(base_dir=args.root_path, split="val", transform=transforms.Compose([
+        ReShape(args.patch_size)
+    ]))
+    
     total_slices = len(db_train)
     labeled_slice = patients_to_slices(args.root_path, args.labeled_num)
     print("Total silices is: {}, labeled slices is: {}".format(
@@ -237,7 +247,7 @@ def train(args, snapshot_path):
                 model.eval()
                 metric_list = 0.0
                 for i_batch, sampled_batch in enumerate(valloader):
-                    metric_i = test_single_volume_ds(
+                    metric_i = my_test_single_ds(
                         sampled_batch["image"], sampled_batch["label"], model, classes=num_classes)
                     metric_list += np.array(metric_i)
                 metric_list = metric_list / len(db_val)

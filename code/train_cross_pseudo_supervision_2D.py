@@ -22,10 +22,10 @@ from tqdm import tqdm
 
 from dataloaders import utils
 from dataloaders.dataset import (BaseDataSets, RandomGenerator,
-                                 TwoStreamBatchSampler)
+                                 TwoStreamBatchSampler, MyBaseDataSets, ReShape)
 from networks.net_factory import net_factory
 from utils import losses, metrics, ramps
-from val_2D import test_single_volume
+from val_2D import test_single_volume, my_test
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str,
@@ -47,6 +47,8 @@ parser.add_argument('--patch_size', type=list,  default=[256, 256],
 parser.add_argument('--seed', type=int,  default=1337, help='random seed')
 parser.add_argument('--num_classes', type=int,  default=4,
                     help='output channel of network')
+parser.add_argument('--in_channels', type=int,  default=3,
+                    help='input channel of network')
 
 # label and unlabel
 parser.add_argument('--labeled_bs', type=int, default=12,
@@ -84,7 +86,7 @@ def xavier_normal_init_weight(model):
 def patients_to_slices(dataset, patiens_num):
     ref_dict = None
     if "ACDC" in dataset:
-        ref_dict = {"3": 68, "7": 136,
+        ref_dict = {"3": 17, "7": 136,
                     "14": 256, "21": 396, "28": 512, "35": 664, "140": 1312}
     elif "Prostate":
         ref_dict = {"2": 27, "4": 53, "8": 120,
@@ -114,7 +116,7 @@ def train(args, snapshot_path):
 
     def create_model(ema=False):
         # Network definition
-        model = net_factory(net_type=args.model, in_chns=1,
+        model = net_factory(net_type=args.model, in_chns=args.in_channels,
                             class_num=num_classes)
         if ema:
             for param in model.parameters():
@@ -127,10 +129,16 @@ def train(args, snapshot_path):
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
 
-    db_train = BaseDataSets(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
+    # db_train = BaseDataSets(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
+    #     RandomGenerator(args.patch_size)
+    # ]))
+    # db_val = BaseDataSets(base_dir=args.root_path, split="val")
+    db_train = MyBaseDataSets(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
         RandomGenerator(args.patch_size)
     ]))
-    db_val = BaseDataSets(base_dir=args.root_path, split="val")
+    db_val = MyBaseDataSets(base_dir=args.root_path, split="val", transform=transforms.Compose([
+        ReShape(args.patch_size)
+    ]))
 
     total_slices = len(db_train)
     labeled_slice = patients_to_slices(args.root_path, args.labeled_num)
@@ -142,7 +150,7 @@ def train(args, snapshot_path):
         labeled_idxs, unlabeled_idxs, batch_size, batch_size-args.labeled_bs)
 
     trainloader = DataLoader(db_train, batch_sampler=batch_sampler,
-                             num_workers=4, pin_memory=True, worker_init_fn=worker_init_fn)
+                             num_workers=2, pin_memory=True, worker_init_fn=worker_init_fn)
 
     model1.train()
     model2.train()
@@ -237,7 +245,7 @@ def train(args, snapshot_path):
                 model1.eval()
                 metric_list = 0.0
                 for i_batch, sampled_batch in enumerate(valloader):
-                    metric_i = test_single_volume(
+                    metric_i = my_test(
                         sampled_batch["image"], sampled_batch["label"], model1, classes=num_classes)
                     metric_list += np.array(metric_i)
                 metric_list = metric_list / len(db_val)
@@ -246,7 +254,7 @@ def train(args, snapshot_path):
                                       metric_list[class_i, 0], iter_num)
                     writer.add_scalar('info/model1_val_{}_hd95'.format(class_i+1),
                                       metric_list[class_i, 1], iter_num)
-
+                # only mean the first ele
                 performance1 = np.mean(metric_list, axis=0)[0]
 
                 mean_hd951 = np.mean(metric_list, axis=0)[1]
@@ -270,7 +278,7 @@ def train(args, snapshot_path):
                 model2.eval()
                 metric_list = 0.0
                 for i_batch, sampled_batch in enumerate(valloader):
-                    metric_i = test_single_volume(
+                    metric_i = my_test(
                         sampled_batch["image"], sampled_batch["label"], model2, classes=num_classes)
                     metric_list += np.array(metric_i)
                 metric_list = metric_list / len(db_val)

@@ -1,0 +1,10 @@
+Update training code for new dataset
+
+* Refactor training code for cross_consistency_training_2D
+* Refactor training code for cross_pseudo_supervision_2D
+* Refactor training code for train_mean_teacher_2D
+* Refactor training code for uncertainty_aware_mean_teacher_2D
+* Refactor training code for uncertainty_rectified_pyramid_consistency_2D
+
+* Add glas Dataset
+* Add in_channels input cli
